@@ -158,18 +158,20 @@ class HookHandler:
         session_id = raw_input.get("session_id")
         cwd = raw_input.get("cwd")
 
-        # If logger doesn't have session_id yet, add it
-        if session_id and not self._logger._session_id:
-            self._logger = self._logger.with_session(session_id)
-
-        # If logger doesn't have a log file and we have cwd, reconfigure
-        if cwd and not self._logger._log_file:
+        # Always reconfigure logger with project cwd if available.
+        # This is necessary because hooks run in their own directory
+        # (via cd $PLUGIN_ROOT/hooks/HookName), but logs should go to
+        # the project's .claude/logs/ directory.
+        if cwd:
             self._logger = HookLogger.create_default(
                 hook_name=self._logger._hook_name,
                 namespace=self._logger._namespace,
-                session_id=session_id,
+                session_id=session_id or self._logger._session_id,
                 cwd=cwd,
             )
+        elif session_id and not self._logger._session_id:
+            # Just add session_id if no cwd but we have session
+            self._logger = self._logger.with_session(session_id)
 
     def _dispatch(self, hook_event_name: str, raw_input: dict) -> BaseHookResponse | None:
         """Dispatch to the appropriate handler based on hook type."""
