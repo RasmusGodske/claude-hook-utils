@@ -249,11 +249,36 @@ class HookHandler:
         # Get the response JSON to extract decision info
         response_json = response.to_json()
         hook_output = response_json.get("hookSpecificOutput", {})
-        permission_decision = hook_output.get("permissionDecision", "unknown")
-        reason = hook_output.get("permissionDecisionReason")
 
-        self._logger.decision(
-            decision=permission_decision,
-            reason=reason,
-            tool_name=tool_name,
-        )
+        # Handle different hook types
+        if hook_event_name == "PreToolUse":
+            # PreToolUse has permissionDecision (allow/deny/ask)
+            permission_decision = hook_output.get("permissionDecision", "unknown")
+            reason = hook_output.get("permissionDecisionReason")
+            self._logger.decision(
+                decision=permission_decision,
+                reason=reason,
+                tool_name=tool_name,
+            )
+        elif hook_event_name == "PostToolUse":
+            # PostToolUse has additionalContext (no permission decision)
+            additional_context = hook_output.get("additionalContext")
+            if additional_context:
+                self._logger.decision(
+                    decision="context_added",
+                    reason=additional_context[:100] + "..." if len(additional_context) > 100 else additional_context,
+                    tool_name=tool_name,
+                )
+            else:
+                self._logger.decision(
+                    decision="acknowledged",
+                    reason="PostToolUse completed without context",
+                    tool_name=tool_name,
+                )
+        else:
+            # Unknown hook type
+            self._logger.decision(
+                decision="unknown",
+                reason=f"Unknown hook event: {hook_event_name}",
+                tool_name=tool_name,
+            )
