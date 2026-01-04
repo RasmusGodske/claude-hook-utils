@@ -350,28 +350,48 @@ class PostToolUseInput:
 
 ### Response Contract
 
-PostToolUse responses are primarily for logging/side effects. The tool has already executed.
+PostToolUse responses can provide additional context to Claude. The tool has already executed.
 
 ```python
 @dataclass
 class PostToolUseResponse:
-    # PostToolUse can add system messages but cannot change what happened
+    additional_context: str | None = None
 
     @staticmethod
     def acknowledge() -> PostToolUseResponse:
         """Acknowledge the tool result (no action)."""
 
     @staticmethod
+    def with_context(context: str) -> PostToolUseResponse:
+        """
+        Add additional context for Claude to consider.
+
+        The context is fed back to Claude but not directly displayed to the user.
+        Use this for reminders, warnings, or suggestions based on what was executed.
+        """
+
+    @staticmethod
     def with_message(message: str) -> PostToolUseResponse:
-        """Add a system message shown to the user."""
+        """Alias for with_context() for backwards compatibility."""
 ```
 
-**Output JSON:**
+**Output JSON (acknowledge):**
 
 ```json
 {
   "hookSpecificOutput": {
     "hookEventName": "PostToolUse"
+  }
+}
+```
+
+**Output JSON (with context):**
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PostToolUse",
+    "additionalContext": "Consider using a service class for this operation."
   }
 }
 ```
@@ -485,10 +505,10 @@ These optional fields work across all hook types:
 
 ```json
 {
-  "continue": false,           // Stop Claude entirely
-  "stopReason": "message",     // Shown when continue=false
-  "suppressOutput": true,      // Hide stdout from transcript
-  "systemMessage": "warning"   // Warning shown to user
+  "continue": false,              // Stop Claude entirely
+  "stopReason": "message",        // Shown when continue=false
+  "suppressOutput": true,         // Hide stdout from transcript
+  "additionalContext": "context"  // Context provided to Claude (PostToolUse)
 }
 ```
 

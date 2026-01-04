@@ -12,15 +12,15 @@ class PostToolUseResponse(BaseHookResponse):
     Response for PostToolUse hooks.
 
     PostToolUse hooks run after the tool has completed, so they cannot
-    block or modify the tool call. They can only acknowledge or add
-    system messages.
+    block or modify the tool call. They can only acknowledge or provide
+    additional context to Claude.
 
     Use the static factory methods to create responses:
         PostToolUseResponse.acknowledge()
-        PostToolUseResponse.with_message("Warning message")
+        PostToolUseResponse.with_context("Additional context for Claude")
     """
 
-    system_message: str | None = None
+    additional_context: str | None = None
 
     @staticmethod
     def acknowledge() -> "PostToolUseResponse":
@@ -28,22 +28,40 @@ class PostToolUseResponse(BaseHookResponse):
         Acknowledge the tool result without any action.
 
         Returns:
-            PostToolUseResponse with no message.
+            PostToolUseResponse with no additional context.
         """
         return PostToolUseResponse()
 
     @staticmethod
-    def with_message(message: str) -> "PostToolUseResponse":
+    def with_context(context: str) -> "PostToolUseResponse":
         """
-        Acknowledge with a system message shown to the user.
+        Acknowledge with additional context provided to Claude.
+
+        The context is added to Claude's understanding but not directly
+        displayed to the user.
 
         Args:
-            message: Message to display to the user.
+            context: Additional context for Claude to consider.
 
         Returns:
-            PostToolUseResponse with system message.
+            PostToolUseResponse with additional context.
         """
-        return PostToolUseResponse(system_message=message)
+        return PostToolUseResponse(additional_context=context)
+
+    @staticmethod
+    def with_message(message: str) -> "PostToolUseResponse":
+        """
+        Alias for with_context() for backwards compatibility.
+
+        Deprecated: Use with_context() instead.
+
+        Args:
+            message: Additional context for Claude to consider.
+
+        Returns:
+            PostToolUseResponse with additional context.
+        """
+        return PostToolUseResponse(additional_context=message)
 
     def to_json(self) -> dict[str, Any]:
         """
@@ -56,7 +74,7 @@ class PostToolUseResponse(BaseHookResponse):
             "hookEventName": "PostToolUse",
         }
 
-        if self.system_message:
-            output["systemMessage"] = self.system_message
+        if self.additional_context:
+            output["additionalContext"] = self.additional_context
 
         return {"hookSpecificOutput": output}
