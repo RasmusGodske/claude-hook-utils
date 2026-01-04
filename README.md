@@ -187,26 +187,38 @@ class PreToolUseResponse:
 
 ### `HookLogger`
 
-Optional logging utility:
+JSONL-based logging for easy debugging. Logs are organized by namespace (plugin name).
 
 ```python
 from claude_hook_utils import HookHandler, HookLogger
 
 class MyHandler(HookHandler):
     def __init__(self):
+        # Logs to .claude/logs/my-plugin/hooks.jsonl
         super().__init__(
-            logger=HookLogger(
-                log_file="my-validator.log",
-                include_timestamp=True,
-            )
+            logger=HookLogger.create_default("MyHandler", namespace="my-plugin")
         )
 
     def pre_tool_use(self, input: PreToolUseInput) -> PreToolUseResponse | None:
-        self.logger.info(f"Checking: {input.file_path}")
+        # Session ID is automatically added from input
+        self.logger.info("Checking file", file_path=input.file_path)
         # ... validation logic ...
-        self.logger.decision("allow", input.file_path)
+        self.logger.decision("allow", reason="Validation passed")
         return PreToolUseResponse.allow()
 ```
+
+**Log format (JSONL - one JSON object per line):**
+```json
+{"ts": "2025-01-04T10:15:23.456+00:00", "level": "INFO", "hook": "MyHandler", "namespace": "my-plugin", "session": "abc123", "msg": "Checking file", "file_path": "/path/to/file.php"}
+{"ts": "2025-01-04T10:15:23.458+00:00", "level": "DECISION", "hook": "MyHandler", "namespace": "my-plugin", "session": "abc123", "msg": "decision=allow", "decision": "allow", "reason": "Validation passed"}
+```
+
+**Configuration:**
+- Default location: `{cwd}/.claude/logs/{namespace}/hooks.jsonl`
+- Without namespace: `{cwd}/.claude/logs/hooks.jsonl`
+- Override directory with `CLAUDE_HOOK_LOG_DIR` env var
+- Override namespace with `CLAUDE_HOOK_LOG_NAMESPACE` env var
+- Session ID is automatically extracted from hook input
 
 ## Examples
 
@@ -352,6 +364,13 @@ Claude Code provides these environment variables to hooks:
 |----------|-------------|
 | `CLAUDE_PROJECT_DIR` | Absolute path to project root |
 | `CLAUDE_CODE_REMOTE` | `"true"` if running in web environment |
+
+This package uses:
+
+| Variable | Description |
+|----------|-------------|
+| `CLAUDE_HOOK_LOG_DIR` | Override default log directory (default: `.claude/logs/{namespace}/`) |
+| `CLAUDE_HOOK_LOG_NAMESPACE` | Override log namespace/subdirectory |
 
 Access via `input.cwd` or `os.environ`.
 

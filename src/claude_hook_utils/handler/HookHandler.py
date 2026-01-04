@@ -7,10 +7,11 @@ import sys
 from typing import TYPE_CHECKING
 
 from ..inputs import PostToolUseInput, PreToolUseInput
+from ..logging import HookLogger
 from ..responses import BaseHookResponse, PostToolUseResponse, PreToolUseResponse
 
 if TYPE_CHECKING:
-    from ..logging import HookLogger
+    pass
 
 
 class HookHandler:
@@ -29,9 +30,21 @@ class HookHandler:
         if __name__ == "__main__":
             MyValidator().run()
 
+    With logging enabled (writes to .claude/logs/hooks.jsonl):
+
+        class MyValidator(HookHandler):
+            def __init__(self) -> None:
+                super().__init__(
+                    logger=HookLogger.create_default("MyValidator")
+                )
+
+        if __name__ == "__main__":
+            MyValidator().run()
+
     A single handler can process multiple hook types. The run() method
     reads from stdin, determines the hook type, and dispatches to the
-    appropriate method.
+    appropriate method. The logger automatically receives session_id
+    context when input is processed.
     """
 
     def __init__(self, logger: HookLogger | None = None) -> None:
@@ -40,12 +53,13 @@ class HookHandler:
 
         Args:
             logger: Optional HookLogger for logging decisions and events.
+                    Use HookLogger.create_default("HookName") for easy setup.
         """
         self._logger = logger
 
     @property
     def logger(self) -> HookLogger | None:
-        """Get the logger instance."""
+        """Get the logger instance (with session context if available)."""
         return self._logger
 
     # -------------------------------------------------------------------------
@@ -76,7 +90,7 @@ class HookHandler:
             input: The PostToolUse input containing tool_result, tool_error, etc.
 
         Returns:
-            PostToolUseResponse to acknowledge or add messages, or None to skip.
+            PostToolUseResponse to acknowledge or add context, or None to skip.
         """
         return None
 
@@ -103,6 +117,9 @@ class HookHandler:
         if raw_input is None:
             return 0  # No input, skip
 
+        # Update logger with session context from input
+        self._update_logger_context(raw_input)
+
         hook_event_name = raw_input.get("hook_event_name", "")
         response = self._dispatch(hook_event_name, raw_input)
 
@@ -125,6 +142,27 @@ class HookHandler:
             return None
 
         return json.loads(content)
+
+    def _update_logger_context(self, raw_input: dict) -> None:
+        """Update logger with session context from input."""
+        if not self._logger:
+            return
+
+        session_id = raw_input.get("session_id")
+        cwd = raw_input.get("cwd")
+
+        # If logger doesn't have session_id yet, add it
+        if session_id and not self._logger._session_id:
+            self._logger = self._logger.with_session(session_id)
+
+        # If logger doesn't have a log file and we have cwd, reconfigure
+        if cwd and not self._logger._log_file:
+            self._logger = HookLogger.create_default(
+                hook_name=self._logger._hook_name,
+                namespace=self._logger._namespace,
+                session_id=session_id,
+                cwd=cwd,
+            )
 
     def _dispatch(self, hook_event_name: str, raw_input: dict) -> BaseHookResponse | None:
         """Dispatch to the appropriate handler based on hook type."""
