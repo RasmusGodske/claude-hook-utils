@@ -248,7 +248,7 @@ class HookHandler:
         response_json = response.to_json()
         hook_output = response_json.get("hookSpecificOutput", {})
         permission_decision = hook_output.get("permissionDecision", "unknown")
-        reason = hook_output.get("reason")
+        reason = hook_output.get("permissionDecisionReason")
 
         self._logger.decision(
             decision=permission_decision,
