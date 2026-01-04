@@ -121,7 +121,14 @@ class HookHandler:
         self._update_logger_context(raw_input)
 
         hook_event_name = raw_input.get("hook_event_name", "")
+
+        # Log hook invocation
+        self._log_hook_invocation(hook_event_name, raw_input)
+
         response = self._dispatch(hook_event_name, raw_input)
+
+        # Log hook response
+        self._log_hook_response(hook_event_name, raw_input, response)
 
         if response is not None:
             self._write_response(response)
@@ -190,3 +197,61 @@ class HookHandler:
             self._logger.error(message)
         else:
             print(f"[HookHandler] {message}", file=sys.stderr)
+
+    def _log_hook_invocation(self, hook_event_name: str, raw_input: dict) -> None:
+        """Log when a hook is invoked."""
+        if not self._logger:
+            return
+
+        # Extract key context from input
+        tool_name = raw_input.get("tool_name", "unknown")
+        tool_input = raw_input.get("tool_input", {})
+
+        # Extract relevant info based on tool type
+        context: dict = {
+            "tool_name": tool_name,
+        }
+
+        # Add file_path if present
+        if "file_path" in tool_input:
+            context["file_path"] = tool_input["file_path"]
+
+        # Add command if present (for Bash)
+        if "command" in tool_input:
+            # Truncate long commands
+            command = tool_input["command"]
+            context["command"] = command[:200] + "..." if len(command) > 200 else command
+
+        self._logger.info(f"Hook invoked: {hook_event_name}", **context)
+
+    def _log_hook_response(
+        self,
+        hook_event_name: str,
+        raw_input: dict,
+        response: BaseHookResponse | None,
+    ) -> None:
+        """Log the hook response."""
+        if not self._logger:
+            return
+
+        tool_name = raw_input.get("tool_name", "unknown")
+
+        if response is None:
+            self._logger.decision(
+                decision="skip",
+                reason="No opinion (returned None)",
+                tool_name=tool_name,
+            )
+            return
+
+        # Get the response JSON to extract decision info
+        response_json = response.to_json()
+        hook_output = response_json.get("hookSpecificOutput", {})
+        permission_decision = hook_output.get("permissionDecision", "unknown")
+        reason = hook_output.get("reason")
+
+        self._logger.decision(
+            decision=permission_decision,
+            reason=reason,
+            tool_name=tool_name,
+        )
