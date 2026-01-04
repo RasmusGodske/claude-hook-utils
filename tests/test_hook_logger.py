@@ -121,7 +121,7 @@ class TestHookLoggerOutput:
             assert isinstance(entry, dict)
 
     def test_includes_required_fields(self, tmp_path: Path) -> None:
-        """Should include ts, level, hook, and msg fields."""
+        """Should include ts, level, type, hook, and msg fields."""
         log_file = tmp_path / "test.jsonl"
         logger = HookLogger("TestHook", log_file=log_file)
 
@@ -129,7 +129,8 @@ class TestHookLoggerOutput:
 
         entry = json.loads(log_file.read_text().strip())
         assert "ts" in entry
-        assert entry["level"] == "INFO"
+        assert entry["level"] == "info"
+        assert entry["type"] == "debug"  # info() uses type=debug for general messages
         assert entry["hook"] == "TestHook"
         assert entry["msg"] == "Test message"
 
@@ -198,45 +199,60 @@ class TestHookLoggerLevels:
     """Tests for different log levels."""
 
     def test_info_level(self, tmp_path: Path) -> None:
-        """info() should log with INFO level."""
+        """info() should log with info level."""
         log_file = tmp_path / "test.jsonl"
         logger = HookLogger("TestHook", log_file=log_file)
 
         logger.info("Info message")
 
         entry = json.loads(log_file.read_text().strip())
-        assert entry["level"] == "INFO"
+        assert entry["level"] == "info"
+        assert entry["type"] == "debug"
 
     def test_error_level(self, tmp_path: Path) -> None:
-        """error() should log with ERROR level."""
+        """error() should log with error level."""
         log_file = tmp_path / "test.jsonl"
         logger = HookLogger("TestHook", log_file=log_file)
 
         logger.error("Error message")
 
         entry = json.loads(log_file.read_text().strip())
-        assert entry["level"] == "ERROR"
+        assert entry["level"] == "error"
+        assert entry["type"] == "debug"
 
     def test_debug_level(self, tmp_path: Path) -> None:
-        """debug() should log with DEBUG level."""
+        """debug() should log with debug level."""
         log_file = tmp_path / "test.jsonl"
         logger = HookLogger("TestHook", log_file=log_file)
 
         logger.debug("Debug message")
 
         entry = json.loads(log_file.read_text().strip())
-        assert entry["level"] == "DEBUG"
+        assert entry["level"] == "debug"
+        assert entry["type"] == "debug"
 
-    def test_decision_level(self, tmp_path: Path) -> None:
-        """decision() should log with DECISION level."""
+    def test_warning_level(self, tmp_path: Path) -> None:
+        """warning() should log with warning level."""
         log_file = tmp_path / "test.jsonl"
         logger = HookLogger("TestHook", log_file=log_file)
 
-        logger.decision("allow", reason="Test reason")
+        logger.warning("Warning message")
 
         entry = json.loads(log_file.read_text().strip())
-        assert entry["level"] == "DECISION"
-        assert entry["decision"] == "allow"
+        assert entry["level"] == "warning"
+        assert entry["type"] == "debug"
+
+    def test_decision_deprecated(self, tmp_path: Path) -> None:
+        """decision() should map to response() for backward compatibility."""
+        log_file = tmp_path / "test.jsonl"
+        logger = HookLogger("TestHook", log_file=log_file)
+
+        logger.decision("allow", reason="Test reason", tool_name="Write", hook_event="PreToolUse")
+
+        entry = json.loads(log_file.read_text().strip())
+        assert entry["level"] == "info"
+        assert entry["type"] == "response"
+        assert entry["outcome"] == "allow"
         assert entry["reason"] == "Test reason"
 
     def test_decision_with_response_time(self, tmp_path: Path) -> None:
@@ -244,10 +260,109 @@ class TestHookLoggerLevels:
         log_file = tmp_path / "test.jsonl"
         logger = HookLogger("TestHook", log_file=log_file)
 
-        logger.decision("deny", response_time_ms=15.5)
+        logger.decision("deny", response_time_ms=15.5, tool_name="Write", hook_event="PreToolUse")
 
         entry = json.loads(log_file.read_text().strip())
         assert entry["response_time_ms"] == 15.5
+
+
+class TestHookLoggerInvocation:
+    """Tests for invocation() method."""
+
+    def test_invocation_logs_correct_structure(self, tmp_path: Path) -> None:
+        """invocation() should log with type=invocation."""
+        log_file = tmp_path / "test.jsonl"
+        logger = HookLogger("TestHook", log_file=log_file)
+
+        logger.invocation("PreToolUse", tool_name="Write", file_path="/path/to/file.php")
+
+        entry = json.loads(log_file.read_text().strip())
+        assert entry["level"] == "info"
+        assert entry["type"] == "invocation"
+        assert entry["hook_event"] == "PreToolUse"
+        assert entry["tool_name"] == "Write"
+        assert entry["file_path"] == "/path/to/file.php"
+
+    def test_invocation_with_command(self, tmp_path: Path) -> None:
+        """invocation() should include command for Bash tools."""
+        log_file = tmp_path / "test.jsonl"
+        logger = HookLogger("TestHook", log_file=log_file)
+
+        logger.invocation("PreToolUse", tool_name="Bash", command="echo hello")
+
+        entry = json.loads(log_file.read_text().strip())
+        assert entry["tool_name"] == "Bash"
+        assert entry["command"] == "echo hello"
+
+
+class TestHookLoggerResponse:
+    """Tests for response() method."""
+
+    def test_response_logs_correct_structure(self, tmp_path: Path) -> None:
+        """response() should log with type=response and include outcome."""
+        log_file = tmp_path / "test.jsonl"
+        logger = HookLogger("TestHook", log_file=log_file)
+
+        logger.response(
+            hook_event="PreToolUse",
+            outcome="allow",
+            tool_name="Write",
+            reason="Validation passed",
+        )
+
+        entry = json.loads(log_file.read_text().strip())
+        assert entry["level"] == "info"
+        assert entry["type"] == "response"
+        assert entry["hook_event"] == "PreToolUse"
+        assert entry["outcome"] == "allow"
+        assert entry["tool_name"] == "Write"
+        assert entry["reason"] == "Validation passed"
+
+    def test_response_with_raw_response(self, tmp_path: Path) -> None:
+        """response() should include raw_response for debugging."""
+        log_file = tmp_path / "test.jsonl"
+        logger = HookLogger("TestHook", log_file=log_file)
+
+        raw = {"hookSpecificOutput": {"permissionDecision": "allow"}}
+        logger.response(
+            hook_event="PreToolUse",
+            outcome="allow",
+            tool_name="Write",
+            raw_response=raw,
+        )
+
+        entry = json.loads(log_file.read_text().strip())
+        assert entry["raw_response"] == raw
+
+    def test_response_without_raw_response(self, tmp_path: Path) -> None:
+        """response() should not include raw_response when None."""
+        log_file = tmp_path / "test.jsonl"
+        logger = HookLogger("TestHook", log_file=log_file)
+
+        logger.response(
+            hook_event="PreToolUse",
+            outcome="skip",
+            tool_name="Write",
+            raw_response=None,
+        )
+
+        entry = json.loads(log_file.read_text().strip())
+        assert "raw_response" not in entry
+
+    def test_response_with_response_time(self, tmp_path: Path) -> None:
+        """response() should include response_time_ms when provided."""
+        log_file = tmp_path / "test.jsonl"
+        logger = HookLogger("TestHook", log_file=log_file)
+
+        logger.response(
+            hook_event="PreToolUse",
+            outcome="allow",
+            tool_name="Write",
+            response_time_ms=12.345,
+        )
+
+        entry = json.loads(log_file.read_text().strip())
+        assert entry["response_time_ms"] == 12.35  # Rounded to 2 decimal places
 
 
 class TestHookLoggerNull:
@@ -260,7 +375,8 @@ class TestHookLoggerNull:
         # Should not raise even though there's no log file
         logger.info("Test message")
         logger.error("Error message")
-        logger.decision("allow")
+        logger.invocation("PreToolUse", tool_name="Write")
+        logger.response("PreToolUse", "allow", tool_name="Write")
 
         # Verify no files were created
         assert not list(tmp_path.glob("**/*.jsonl"))
@@ -304,4 +420,5 @@ class TestHookLoggerDisabled:
         # Should not raise
         logger.info("Test message")
         logger.error("Error message")
-        logger.decision("allow")
+        logger.invocation("PreToolUse", tool_name="Write")
+        logger.response("PreToolUse", "allow", tool_name="Write")

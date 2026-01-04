@@ -1,6 +1,6 @@
 [project]
 name = "claude-hook-utils"
-version = "0.2.3"
+version = "0.3.0"
 description = "Utilities for building Claude Code hooks with minimal boilerplate"
 readme = "README.md"
 requires-python = ">=3.10"

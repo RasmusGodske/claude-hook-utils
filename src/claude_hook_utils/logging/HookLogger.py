@@ -17,6 +17,10 @@ class HookLogger:
     Writes structured JSON lines to a log file for easy debugging and analysis.
     Each log entry includes timestamp, session ID, hook name, and context.
 
+    Log entries have two key fields for filtering:
+    - level: Severity (debug, info, warning, error)
+    - type: Entry type (invocation, response, debug)
+
     Example:
         # Simple setup with defaults (writes to .claude/logs/hooks.jsonl)
         logger = HookLogger.create_default("MyValidator")
@@ -26,11 +30,12 @@ class HookLogger:
 
         # Usage
         logger.info("Processing file", file_path="/path/to/file.php")
-        logger.decision("allow", reason="Validation passed")
+        logger.invocation("PreToolUse", tool_name="Write", file_path="/path")
+        logger.response("PreToolUse", "allow", raw_response={...}, tool_name="Write")
 
     Log format (JSONL - one JSON object per line):
-        {"ts": "2025-01-04T10:15:23.456Z", "level": "INFO", "session": "abc123",
-         "hook": "MyValidator", "msg": "Processing file", "file_path": "/path/to/file.php"}
+        {"ts": "...", "level": "info", "type": "invocation", "hook": "MyValidator",
+         "hook_event": "PreToolUse", "tool_name": "Write", ...}
     """
 
     DEFAULT_LOG_DIR = ".claude/logs"
@@ -173,28 +178,69 @@ class HookLogger:
         return self.elapsed(start) * 1000
 
     # -------------------------------------------------------------------------
-    # Logging methods
+    # Structured logging methods (new API)
     # -------------------------------------------------------------------------
 
-    def info(self, message: str, **context: Any) -> None:
+    def invocation(
+        self,
+        hook_event: str,
+        tool_name: str,
+        **context: Any,
+    ) -> None:
         """
-        Log an info message.
+        Log a hook invocation.
 
         Args:
-            message: The message to log.
-            **context: Additional context as key-value pairs.
+            hook_event: The hook event type (PreToolUse, PostToolUse).
+            tool_name: Name of the tool being invoked.
+            **context: Additional context (file_path, command, etc.).
         """
-        self._write("INFO", message, context)
+        ctx = dict(context)
+        ctx["hook_event"] = hook_event
+        ctx["tool_name"] = tool_name
+        self._write_structured("info", "invocation", ctx)
 
-    def error(self, message: str, **context: Any) -> None:
+    def response(
+        self,
+        hook_event: str,
+        outcome: str,
+        tool_name: str,
+        raw_response: dict[str, Any] | None = None,
+        reason: str | None = None,
+        response_time_ms: float | None = None,
+        **context: Any,
+    ) -> None:
         """
-        Log an error message.
+        Log a hook response.
 
         Args:
-            message: The error message.
+            hook_event: The hook event type (PreToolUse, PostToolUse).
+            outcome: The outcome (allow, deny, ask, skip, context_added, acknowledged).
+            tool_name: Name of the tool.
+            raw_response: The raw JSON response from the hook (for debugging).
+            reason: Optional reason for the outcome.
+            response_time_ms: Optional response time in milliseconds.
             **context: Additional context as key-value pairs.
         """
-        self._write("ERROR", message, context)
+        ctx = dict(context)
+        ctx["hook_event"] = hook_event
+        ctx["tool_name"] = tool_name
+        ctx["outcome"] = outcome
+
+        if reason:
+            ctx["reason"] = reason
+
+        if raw_response is not None:
+            ctx["raw_response"] = raw_response
+
+        if response_time_ms is not None:
+            ctx["response_time_ms"] = round(response_time_ms, 2)
+
+        self._write_structured("info", "response", ctx)
+
+    # -------------------------------------------------------------------------
+    # General logging methods
+    # -------------------------------------------------------------------------
 
     def debug(self, message: str, **context: Any) -> None:
         """
@@ -204,7 +250,49 @@ class HookLogger:
             message: The debug message.
             **context: Additional context as key-value pairs.
         """
-        self._write("DEBUG", message, context)
+        ctx = dict(context)
+        ctx["msg"] = message
+        self._write_structured("debug", "debug", ctx)
+
+    def info(self, message: str, **context: Any) -> None:
+        """
+        Log an info message.
+
+        Args:
+            message: The message to log.
+            **context: Additional context as key-value pairs.
+        """
+        ctx = dict(context)
+        ctx["msg"] = message
+        self._write_structured("info", "debug", ctx)
+
+    def warning(self, message: str, **context: Any) -> None:
+        """
+        Log a warning message.
+
+        Args:
+            message: The warning message.
+            **context: Additional context as key-value pairs.
+        """
+        ctx = dict(context)
+        ctx["msg"] = message
+        self._write_structured("warning", "debug", ctx)
+
+    def error(self, message: str, **context: Any) -> None:
+        """
+        Log an error message.
+
+        Args:
+            message: The error message.
+            **context: Additional context as key-value pairs.
+        """
+        ctx = dict(context)
+        ctx["msg"] = message
+        self._write_structured("error", "debug", ctx)
+
+    # -------------------------------------------------------------------------
+    # Deprecated methods (for backward compatibility)
+    # -------------------------------------------------------------------------
 
     def decision(
         self,
@@ -216,37 +304,45 @@ class HookLogger:
         """
         Log a hook decision.
 
+        DEPRECATED: Use response() instead for new code.
+
         Args:
             decision: The decision made ("allow", "deny", "ask", "skip", "context").
             reason: Optional reason for the decision.
             response_time_ms: Optional response time in milliseconds.
             **context: Additional context as key-value pairs.
         """
-        ctx = dict(context)
-        ctx["decision"] = decision
-
-        if reason:
-            ctx["reason"] = reason
-
-        if response_time_ms is not None:
-            ctx["response_time_ms"] = round(response_time_ms, 2)
-
-        self._write("DECISION", f"decision={decision}", ctx)
+        # Map to new response() method
+        tool_name = context.pop("tool_name", "unknown")
+        hook_event = context.pop("hook_event", "unknown")
+        self.response(
+            hook_event=hook_event,
+            outcome=decision,
+            tool_name=tool_name,
+            reason=reason,
+            response_time_ms=response_time_ms,
+            **context,
+        )
 
     # -------------------------------------------------------------------------
     # Internal methods
     # -------------------------------------------------------------------------
 
-    def _write(self, level: str, message: str, context: dict[str, Any]) -> None:
-        """Write a JSONL log entry."""
+    def _write_structured(
+        self,
+        level: str,
+        entry_type: str,
+        context: dict[str, Any],
+    ) -> None:
+        """Write a structured JSONL log entry."""
         if not self._log_file:
             return
 
         entry: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
             "level": level,
+            "type": entry_type,
             "hook": self._hook_name,
-            "msg": message,
         }
 
         if self._namespace:
@@ -273,6 +369,11 @@ class _NullLogger(HookLogger):
     def __init__(self) -> None:
         super().__init__(hook_name="null", session_id=None, log_file=None)
 
-    def _write(self, level: str, message: str, context: dict[str, Any]) -> None:
+    def _write_structured(
+        self,
+        level: str,
+        entry_type: str,
+        context: dict[str, Any],
+    ) -> None:
         """Discard the log entry."""
         pass
