@@ -30,3 +30,6 @@ htmlcov/
 
 # uv
 uv.lock
+
+# Log files
+.claude/logs/
