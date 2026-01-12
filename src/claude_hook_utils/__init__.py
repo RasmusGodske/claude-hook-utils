@@ -18,14 +18,39 @@ Quick Start:
 
     if __name__ == "__main__":
         MyValidator().run()
+
+Subagent Hooks:
+    from claude_hook_utils import HookHandler, SubagentStopInput, SubagentStopResponse
+
+    class SubagentReviewer(HookHandler):
+        def subagent_stop(self, input: SubagentStopInput) -> SubagentStopResponse | None:
+            # Review agent output...
+            if issues_found:
+                return SubagentStopResponse.block("Please fix: ...")
+            return SubagentStopResponse.allow()
+
+    if __name__ == "__main__":
+        SubagentReviewer().run()
 """
 
 from .handler import HookHandler
-from .inputs import BaseHookInput, PostToolUseInput, PreToolUseInput
+from .inputs import (
+    BaseHookInput,
+    PostToolUseInput,
+    PreToolUseInput,
+    SubagentStartInput,
+    SubagentStopInput,
+)
 from .logging import HookLogger
-from .responses import BaseHookResponse, PostToolUseResponse, PreToolUseResponse
+from .responses import (
+    BaseHookResponse,
+    PostToolUseResponse,
+    PreToolUseResponse,
+    SubagentStartResponse,
+    SubagentStopResponse,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 
 __all__ = [
     # Handler
@@ -34,10 +59,14 @@ __all__ = [
     "BaseHookInput",
     "PreToolUseInput",
     "PostToolUseInput",
+    "SubagentStartInput",
+    "SubagentStopInput",
     # Responses
     "BaseHookResponse",
     "PreToolUseResponse",
     "PostToolUseResponse",
+    "SubagentStartResponse",
+    "SubagentStopResponse",
     # Logging
     "HookLogger",
 ]

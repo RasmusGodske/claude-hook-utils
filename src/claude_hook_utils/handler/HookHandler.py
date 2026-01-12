@@ -6,9 +6,20 @@ import json
 import sys
 from typing import TYPE_CHECKING
 
-from ..inputs import PostToolUseInput, PreToolUseInput
+from ..inputs import (
+    PostToolUseInput,
+    PreToolUseInput,
+    SubagentStartInput,
+    SubagentStopInput,
+)
 from ..logging import HookLogger
-from ..responses import BaseHookResponse, PostToolUseResponse, PreToolUseResponse
+from ..responses import (
+    BaseHookResponse,
+    PostToolUseResponse,
+    PreToolUseResponse,
+    SubagentStartResponse,
+    SubagentStopResponse,
+)
 
 if TYPE_CHECKING:
     pass
@@ -91,6 +102,36 @@ class HookHandler:
 
         Returns:
             PostToolUseResponse to acknowledge or add context, or None to skip.
+        """
+        return None
+
+    def subagent_start(self, input: SubagentStartInput) -> SubagentStartResponse | None:
+        """
+        Handle SubagentStart hook.
+
+        Override this method to track or intercept subagent (Task tool) starts.
+
+        Args:
+            input: The SubagentStart input containing agent_id, agent_type, etc.
+
+        Returns:
+            SubagentStartResponse to allow, or None to skip (allows by default).
+        """
+        return None
+
+    def subagent_stop(self, input: SubagentStopInput) -> SubagentStopResponse | None:
+        """
+        Handle SubagentStop hook.
+
+        Override this method to review or intercept subagent completions.
+        This is commonly used for code review hooks that validate agent output.
+
+        Args:
+            input: The SubagentStop input containing agent_id, agent_transcript_path,
+                   and stop_hook_active (True if this is a retry after a previous block).
+
+        Returns:
+            SubagentStopResponse to allow/block, or None to skip (allows by default).
         """
         return None
 
@@ -184,6 +225,14 @@ class HookHandler:
                 input_obj = PostToolUseInput.from_dict(raw_input)
                 return self.post_tool_use(input_obj)
 
+            case "SubagentStart":
+                input_obj = SubagentStartInput.from_dict(raw_input)
+                return self.subagent_start(input_obj)
+
+            case "SubagentStop":
+                input_obj = SubagentStopInput.from_dict(raw_input)
+                return self.subagent_stop(input_obj)
+
             case _:
                 self._log_error(f"Unknown hook event: {hook_event_name}")
                 return None
@@ -191,7 +240,9 @@ class HookHandler:
     def _write_response(self, response: BaseHookResponse) -> None:
         """Write response JSON to stdout."""
         json_output = response.to_json()
-        print(json.dumps(json_output))
+        # Don't write empty responses (e.g., SubagentStopResponse.allow())
+        if json_output:
+            print(json.dumps(json_output))
 
     def _log_error(self, message: str) -> None:
         """Log an error message."""
@@ -205,24 +256,42 @@ class HookHandler:
         if not self._logger:
             return
 
-        # Extract key context from input
-        tool_name = raw_input.get("tool_name", "unknown")
-        tool_input = raw_input.get("tool_input", {})
-
-        # Build context with relevant info based on tool type
+        # Build context based on hook type
         context: dict = {}
 
-        # Add file_path if present
-        if "file_path" in tool_input:
-            context["file_path"] = tool_input["file_path"]
+        if hook_event_name in ("PreToolUse", "PostToolUse"):
+            # Tool hooks - extract tool info
+            tool_name = raw_input.get("tool_name", "unknown")
+            tool_input = raw_input.get("tool_input", {})
 
-        # Add command if present (for Bash)
-        if "command" in tool_input:
-            # Truncate long commands
-            command = tool_input["command"]
-            context["command"] = command[:200] + "..." if len(command) > 200 else command
+            # Add file_path if present
+            if "file_path" in tool_input:
+                context["file_path"] = tool_input["file_path"]
 
-        self._logger.invocation(hook_event_name, tool_name, **context)
+            # Add command if present (for Bash)
+            if "command" in tool_input:
+                # Truncate long commands
+                command = tool_input["command"]
+                context["command"] = command[:200] + "..." if len(command) > 200 else command
+
+            self._logger.invocation(hook_event_name, tool_name, **context)
+
+        elif hook_event_name in ("SubagentStart", "SubagentStop"):
+            # Subagent hooks - extract agent info
+            agent_id = raw_input.get("agent_id", "unknown")
+            agent_type = raw_input.get("agent_type", "")
+
+            if agent_type:
+                context["agent_type"] = agent_type
+
+            if raw_input.get("stop_hook_active"):
+                context["is_retry"] = True
+
+            self._logger.invocation(hook_event_name, agent_id, **context)
+
+        else:
+            # Unknown hook type - log basic info
+            self._logger.invocation(hook_event_name, "unknown", **context)
 
     def _log_hook_response(
         self,
@@ -234,13 +303,17 @@ class HookHandler:
         if not self._logger:
             return
 
-        tool_name = raw_input.get("tool_name", "unknown")
+        # Get identifier based on hook type
+        if hook_event_name in ("SubagentStart", "SubagentStop"):
+            identifier = raw_input.get("agent_id", "unknown")
+        else:
+            identifier = raw_input.get("tool_name", "unknown")
 
         if response is None:
             self._logger.response(
                 hook_event=hook_event_name,
                 outcome="skip",
-                tool_name=tool_name,
+                tool_name=identifier,
                 reason="No opinion (returned None)",
                 raw_response=None,
             )
@@ -269,6 +342,19 @@ class HookHandler:
             else:
                 outcome = "acknowledged"
                 reason = "PostToolUse completed without context"
+        elif hook_event_name == "SubagentStart":
+            # SubagentStart typically just allows
+            outcome = "allow"
+            reason = "Agent start tracked"
+        elif hook_event_name == "SubagentStop":
+            # SubagentStop uses decision/reason format directly
+            decision = response_json.get("decision")
+            if decision == "block":
+                outcome = "block"
+                reason = response_json.get("reason", "")
+            else:
+                outcome = "allow"
+                reason = "Agent result accepted"
         else:
             outcome = "unknown"
             reason = f"Unknown hook event: {hook_event_name}"
@@ -276,7 +362,7 @@ class HookHandler:
         self._logger.response(
             hook_event=hook_event_name,
             outcome=outcome,
-            tool_name=tool_name,
+            tool_name=identifier,
             reason=reason,
             raw_response=response_json,
         )
